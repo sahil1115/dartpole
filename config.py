@@ -10,7 +10,9 @@ LOG_LEVEL = "INFO"  # Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
 
 # --- Document Processing ---
 DEFAULT_DOCUMENTS_DIR = r"C:\read_doc"
-SUPPORTED_EXTENSIONS = ['.pdf', '.docx', '.doc', '.txt', '.md']
+# No legacy '.doc': docx2txt only reads zip-based .docx; old OLE .doc files
+# would be listed but fail silently during processing.
+SUPPORTED_EXTENSIONS = ['.pdf', '.docx', '.txt', '.md']
 CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 200
 PDF_MIN_TEXT_LENGTH = 20
@@ -66,12 +68,12 @@ Answer:"""
 # --- API Server ---
 API_HOST = "localhost"
 API_PORT = 5000
-API_DEBUG_MODE = True
+API_DEBUG_MODE = False
 
 # --- UI Server ---
 UI_HOST = "localhost"
 UI_PORT = 8000
-UI_DEBUG_MODE = True
+UI_DEBUG_MODE = False
 UI_RELOADER = False
 AUTO_OPEN_BROWSER = True
 

@@ -15,7 +15,6 @@ import time
 import gc
 import psutil
 from flask import Flask, request, jsonify, make_response
-from flask_cors import CORS
 from langchain_community.vectorstores import Chroma # Assuming Chroma is still used directly here
 from threading import Thread # Used for shutdown
 import config # Assuming config.py is in the same directory or accessible
@@ -96,8 +95,10 @@ def reset_vector_store_on_startup():
 
 def create_api_app():
     """Creates the Flask API application."""
+    # No CORS: the UI is served same-origin (DispatcherMiddleware mounts this API
+    # under /api on the same port), and the API must not be callable cross-origin —
+    # it exposes local document content and cleanup/shutdown controls.
     api_instance = Flask(__name__)
-    CORS(api_instance)
 
     # --- Helper functions ---
     def get_llm_manager():
@@ -176,7 +177,9 @@ def create_api_app():
         if app_state["is_processing"]:
             return make_response(jsonify({"status": "error", "message": "Busy with another task."}), 409)
 
-        data = request.json
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return make_response(jsonify({"status": "error", "message": "Request body must be a JSON object."}), 400)
         doc_dir = data.get('directory_path')
         if not doc_dir or not isinstance(doc_dir, str) or not os.path.isdir(doc_dir):
             msg = f"Invalid or non-existent directory path provided: '{doc_dir}'"
@@ -311,7 +314,9 @@ def create_api_app():
         if not app_state["docs_processed"]:
             return make_response(jsonify({"status": "error", "message": "Initialize System (process documents) first."}), 400)
 
-        data = request.json
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return make_response(jsonify({"status": "error", "message": "Request body must be a JSON object."}), 400)
         selected_model = data.get('model_name')
         if not selected_model:
             return make_response(jsonify({"status": "error", "message": "Request missing 'model_name'."}), 400)
@@ -353,12 +358,19 @@ def create_api_app():
 
     @api_instance.route('/query', methods=['POST'])
     def query_llm():
+        # Reject queries while indexing / model-load / cleanup is in flight —
+        # they would race with the very state they depend on.
+        if app_state["is_processing"]:
+            return make_response(jsonify({"status": "error", "message": "Busy with another task."}), 409)
+
         llm_manager = get_llm_manager()
         if not llm_manager or not app_state["is_initialized"]:
             msg = "System not ready. " + ("Please select a model." if app_state["docs_processed"] else "Please initialize and select a model.")
             return make_response(jsonify({"status": "error", "message": msg}), 400)
 
-        data = request.json
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return make_response(jsonify({"status": "error", "message": "Request body must be a JSON object."}), 400)
         question = data.get('question')
         if not question or not question.strip():
             return make_response(jsonify({"status": "error", "message": "Request missing 'question'."}), 400)
@@ -516,7 +528,7 @@ def create_api_app():
             ext = ext.lower()
             if ext == '.pdf':
                 return 'pdf'
-            if ext in ('.docx', '.doc'):
+            if ext == '.docx':
                 return 'doc'
             if ext == '.md':
                 return 'md'
@@ -524,12 +536,16 @@ def create_api_app():
 
         files = []
         try:
+            # Top level only — must mirror DocumentProcessor.process_all_documents
+            # (os.listdir, directories skipped) so this view never lists a file
+            # that indexing won't actually process.
             supported = tuple(config.SUPPORTED_EXTENSIONS)
-            for root, _dirs, names in os.walk(doc_dir):
-                for name in names:
-                    ext = os.path.splitext(name)[1].lower()
-                    if ext in supported:
-                        files.append({"name": name, "type": file_type(ext)})
+            for name in os.listdir(doc_dir):
+                if not os.path.isfile(os.path.join(doc_dir, name)):
+                    continue
+                ext = os.path.splitext(name)[1].lower()
+                if ext in supported:
+                    files.append({"name": name, "type": file_type(ext)})
             files.sort(key=lambda f: f["name"].lower())
         except OSError as e:
             return make_response(jsonify({"status": "error", "message": f"Cannot read directory: {e}"}), 403)
@@ -629,6 +645,8 @@ def create_api_app():
         shutdown_thread.start()
         return jsonify({"status": "success", "message": "Shutdown initiated. Server will terminate shortly."})
 
+    # Expose for callers outside this closure (e.g. the direct-run atexit handler).
+    api_instance.cleanup_internal = cleanup_internal
     return api_instance
 # --- End of create_api_app ---
 
@@ -659,7 +677,7 @@ def direct_run_cleanup_on_exit(): # This is the atexit handler for direct run
     logger.info("Direct run: Initiating cleanup before exit...")
     try:
         # Call the same cleanup_internal as routes use for consistency
-        cleanup_internal() # Assumes app_state is accessible
+        api_app.cleanup_internal()
         logger.info("Direct run: Cleanup on exit completed.")
     except Exception as e:
         logger.error(f"Error during direct run cleanup on exit: {e}", exc_info=True)

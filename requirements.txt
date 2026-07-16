@@ -1,6 +1,5 @@
 # --- Web server ---
 flask>=3.0
-flask-cors>=4.0
 werkzeug>=3.0
 
 # --- LangChain / RAG stack ---

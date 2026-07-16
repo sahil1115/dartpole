@@ -178,7 +178,7 @@ class DocumentProcessor:
                 try:
                     if file_extension == '.pdf':
                         file_specific_docs = process_pdf_file(file_path, self.image_analyzer, self._split_text_into_documents)
-                    elif file_extension in ['.docx', '.doc']: # .doc might need additional handling or conversion
+                    elif file_extension == '.docx':
                         file_specific_docs = process_docx_file(file_path, self.image_analyzer, self._split_text_into_documents)
                     elif file_extension in ['.txt', '.md']:
                         file_specific_docs = process_txt_file(file_path, self._split_text_into_documents)

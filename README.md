@@ -8,7 +8,7 @@
 
 ## Highlights
 
-- **100% local** — documents, embeddings, vector store, and the LLM all stay on-device.
+- **100% local** — documents, embeddings, vector store, and the LLM all stay on-device. (One-time exception: the first run downloads the embedding model from Hugging Face, and Ollama models are downloaded when you `ollama pull` them. After that, everything runs offline.)
 - **Guided first run** — a three-step flow (choose folder → initialize index → pick a model) gets you chatting in seconds.
 - **Grounded answers** — responses cite the exact source passages; a **Sources** panel shows the quoted text per citation.
 - **9 built-in themes** — Light, Dark, Linen, Matcha, Periwinkle, Oat, Harbor, Petal, Fern (choice persists across sessions).

@@ -23,7 +23,7 @@ class DummyConfig:
     CHUNK_SIZE = 1000
     CHUNK_OVERLAP = 200
     PDF_MIN_TEXT_LENGTH = 30
-    SUPPORTED_EXTENSIONS = ['.pdf', '.txt', '.docx', '.doc']
+    SUPPORTED_EXTENSIONS = ['.pdf', '.txt', '.docx', '.md']
     ENABLE_SEMANTIC_CHUNKING = False
     SEMANTIC_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
     ENABLE_FORM_EXTRACTION = True
