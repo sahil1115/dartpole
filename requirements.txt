@@ -1,0 +1,42 @@
+# --- Web server ---
+flask>=3.0
+flask-cors>=4.0
+werkzeug>=3.0
+
+# --- LangChain / RAG stack ---
+langchain>=0.3
+langchain-community>=0.3          # Ollama LLM wrapper, Chroma vector store wrapper
+langchain-huggingface>=0.1        # HuggingFaceEmbeddings (used by llm_manager.py)
+chromadb>=0.5                     # Vector store backend
+
+# --- Local embeddings / semantic chunking ---
+# Install the CUDA build of torch manually if you want GPU embeddings:
+#   https://pytorch.org/get-started/locally/
+torch>=2.1
+sentence-transformers>=2.7
+transformers>=4.40
+scikit-learn>=1.4                 # KMeans topic clustering in text_chunker.py
+numpy>=1.26
+
+# --- Document processing ---
+pypdf>=4.0
+pdfplumber>=0.11                  # PDF text + table extraction
+pdfminer.six>=20231228            # PDF AcroForm (form field) extraction
+pdf2image>=1.17                   # PDF page -> image (requires Poppler, see below)
+pytesseract>=0.3.10               # OCR (requires Tesseract binary, see below)
+docx2txt>=0.8
+Pillow>=10.0
+opencv-python>=4.9                # Graph/chart detection & rotation heuristics
+
+# --- System monitoring (API /stats endpoints) ---
+psutil>=5.9
+
+# ------------------------------------------------------------------
+# System (non-pip) prerequisites:
+#   * Ollama          - https://ollama.com (local LLM server, must be on PATH)
+#   * Tesseract OCR   - https://github.com/UB-Mannheim/tesseract/wiki (Windows)
+#                       expected at C:\Program Files\Tesseract-OCR\tesseract.exe
+#                       (see document_processing/image_utils.py) or on PATH
+#   * Poppler         - https://github.com/oschwartz10612/poppler-windows
+#                       required by pdf2image for page rendering / OCR fallback
+# ------------------------------------------------------------------

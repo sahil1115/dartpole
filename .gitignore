@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# App runtime artifacts (session-only)
+vectorstore_*/
+logs/
+
+# OS
+Thumbs.db
+.DS_Store

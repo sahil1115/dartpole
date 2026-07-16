@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DartPole</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Nunito+Sans:opsz,wght@6..12,400;6..12,600;6..12,700;6..12,800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div class="app" id="app" data-stage="fresh">
+
+    <!-- ============================= HEADER ============================= -->
+    <header class="hdr">
+        <div class="hdr-logo">DP</div>
+        <div class="hdr-title">DartPole</div>
+        <div class="hdr-privacy">100% local · nothing leaves this machine</div>
+        <div class="hdr-spacer"></div>
+
+        <!-- model picker -->
+        <div class="picker" id="modelPicker">
+            <div class="picker-pill" id="modelPill">
+                <span class="pill-dot"></span>
+                <span id="modelPillName">No model</span>
+                <span class="caret">⌄</span>
+            </div>
+            <div class="picker-menu hidden" id="modelMenu">
+                <div class="picker-menu-label">OLLAMA MODELS</div>
+                <div id="modelMenuRows"></div>
+            </div>
+        </div>
+
+        <!-- theme picker -->
+        <div class="picker" id="themePicker">
+            <div class="picker-pill" id="themePill">
+                <span class="pill-swatch"></span>
+                <span id="themePillName">Light</span>
+                <span class="caret">⌄</span>
+            </div>
+            <div class="picker-menu hidden" id="themeMenu">
+                <div class="picker-menu-label">THEMES</div>
+                <div id="themeMenuRows"></div>
+            </div>
+        </div>
+
+        <button class="hdr-btn" id="cleanupBtn">Cleanup</button>
+        <button class="hdr-btn danger" id="shutdownBtn">Shutdown</button>
+    </header>
+
+    <!-- ============================= BODY ============================= -->
+    <div class="body">
+
+        <!-- ===== LEFT COLUMN ===== -->
+        <div class="col-left">
+
+            <!-- Documents panel -->
+            <div class="panel docs-panel">
+                <div class="panel-title-row">
+                    <div class="panel-title">Documents</div>
+                    <div class="panel-note" id="docsBadge"></div>
+                </div>
+
+                <!-- fresh: empty state -->
+                <div class="stage-view v-fresh" id="docsFresh">
+                    <div class="docs-empty">
+                        <div class="ph"></div>
+                        No folder selected yet.<br>Pick one to get started.
+                    </div>
+                    <div class="spacer"></div>
+                    <div class="docs-supported">Supported: PDF · DOCX · TXT · MD</div>
+                </div>
+
+                <!-- indexing: progress -->
+                <div class="stage-view v-index" id="docsIndex">
+                    <div class="idx-bar"><div class="idx-bar-fill"></div></div>
+                    <div class="idx-rows" id="idxRows"></div>
+                    <div class="spacer"></div>
+                </div>
+
+                <!-- ready: document list -->
+                <div class="stage-view v-ready" id="docsReady">
+                    <div class="docs-path" id="docsPath"></div>
+                    <div class="doc-rows" id="docRows"></div>
+                    <div class="spacer"></div>
+                    <div class="docs-actions">
+                        <button class="btn-soft" id="reindexBtn">Re-index</button>
+                        <button class="btn-outline" id="changeFolderBtn">Change folder</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- System stats panel -->
+            <div class="panel sys-panel">
+                <div class="sys-head" id="sysHead">
+                    <div class="sys-title">System</div>
+                    <div class="sys-summary hidden" id="sysSummary">CPU 0% · RAM 0% · DISK 0%</div>
+                    <div class="sys-refresh" id="sysRefresh">refresh 2s</div>
+                    <div class="sys-caret" id="sysCaret">⌄</div>
+                </div>
+                <div id="sysBody">
+                    <div class="sys-bars">
+                        <div class="sys-bar"><span class="lbl">CPU</span><div class="track"><div class="fill" id="cpuFill" style="width:0%"></div></div><span class="pct" id="cpuPct">0%</span></div>
+                        <div class="sys-bar"><span class="lbl">RAM</span><div class="track"><div class="fill" id="ramFill" style="width:0%"></div></div><span class="pct" id="ramPct">0%</span></div>
+                        <div class="sys-bar"><span class="lbl">DISK</span><div class="track"><div class="fill" id="diskFill" style="width:0%"></div></div><span class="pct" id="diskPct">0%</span></div>
+                    </div>
+                    <div class="sys-extra hidden" id="sysExtra">
+                        <div class="kv"><span class="k">embedder</span><span id="sysEmbedder">—</span></div>
+                        <div class="kv"><span class="k">chunks stored</span><span id="sysChunks">0</span></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ===== CENTER PANEL ===== -->
+        <div class="col-center">
+            <div class="panel center-panel">
+
+                <!-- fresh: guided steps -->
+                <div class="stage-view center-fresh v-fresh" id="centerFresh">
+                    <div class="fresh-wrap">
+                        <div class="fresh-inner">
+                            <div class="fresh-h">Chat with your documents.<br><span class="accent">Privately.</span></div>
+                            <div class="fresh-sub">Three steps and you're in. Everything — indexing, search, answers — happens on this machine.</div>
+
+                            <div class="step" id="step1">
+                                <div class="step-num" id="step1Num">1</div>
+                                <div class="step-body">
+                                    <div class="t">Choose a document folder</div>
+                                    <div class="d mono" id="step1Path">No folder chosen</div>
+                                </div>
+                                <button class="step-btn" id="browseBtn">Browse…</button>
+                            </div>
+
+                            <div class="step dim" id="step2">
+                                <div class="step-num">2</div>
+                                <div class="step-body">
+                                    <div class="t">Initialize the local index</div>
+                                    <div class="d">Builds vector search on-device · one time per folder</div>
+                                </div>
+                                <button class="step-btn hidden" id="initBtn">Initialize</button>
+                            </div>
+
+                            <div class="step dim" id="step3">
+                                <div class="step-num">3</div>
+                                <div class="step-body">
+                                    <div class="t">Pick a model &amp; start asking</div>
+                                    <div class="d" id="step3Sub">Any Ollama model you've pulled</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- indexing: center message -->
+                <div class="stage-view center-index v-index" id="centerIndex">
+                    <div class="index-col">
+                        <div class="index-center">
+                            <div class="index-inner">
+                                <div class="index-spinner"><div class="ring"></div></div>
+                                <div class="index-h" id="indexH">Building your local index…</div>
+                                <div class="index-copy">Your documents never leave this machine — the fan noise is your privacy at work.</div>
+                                <div class="index-pill">Chat unlocks when indexing finishes</div>
+                            </div>
+                        </div>
+                        <div class="chat-input disabled">
+                            <input type="text" placeholder="Chat available after indexing…" disabled>
+                            <div class="send-btn disabled">↑</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ready: chat -->
+                <div class="stage-view center-ready v-ready" id="centerReady">
+                    <div class="index-col">
+                        <div class="chat-scroll" id="chatScroll">
+                            <div class="chat-empty" id="chatEmpty">
+                                <div class="h" id="chatEmptyH">Your documents are ready.</div>
+                                <div class="sub">Ask anything — answers cite the exact passages they came from.</div>
+                                <div class="suggestions" id="suggestions"></div>
+                            </div>
+                        </div>
+                        <div class="chat-input" id="chatInputRow">
+                            <input type="text" id="queryInput" placeholder="Ask anything about your documents…">
+                            <button class="send-btn" id="sendBtn">↑</button>
+                            <button class="export-btn" id="exportBtn" disabled>Export ⌄</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ===== RIGHT: SOURCES ===== -->
+        <div class="col-right">
+            <div class="panel sources-panel">
+                <div class="panel-title-row">
+                    <div class="panel-title">Sources</div>
+                    <div class="panel-note hidden" id="sourcesNote">for last answer</div>
+                </div>
+                <div class="sources-empty" id="sourcesEmpty">Every answer will cite the exact passages it came from — they'll appear here.</div>
+                <div class="sources-list hidden" id="sourcesList"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============================= FOOTER ============================= -->
+    <footer class="footer">
+        <span class="status-dot" id="statusDot"></span>
+        <span id="statusText">Not initialized — choose a folder to begin</span>
+        <div class="spacer"></div>
+        <span class="status-right" id="statusRight">PDF · DOCX · TXT · MD</span>
+    </footer>
+</div>
+
+<script src="js/main.js"></script>
+</body>
+</html>
