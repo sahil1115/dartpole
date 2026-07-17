@@ -97,3 +97,9 @@ Header actions: **Cleanup** resets the session and clears the vector store; **Sh
 - The frontend is a faithful build of the `InsightDocsAI App.dc.html` reference prototype (the designated primary deliverable), rebranded to **DartPole** and wired to the existing Flask backend.
 - Because indexing is a single blocking backend call (no per-file streaming API), the indexing stage uses an indeterminate progress bar plus the real file list from `/list-folder`, rather than fabricated per-file completion events.
 - Citation quotes are real: `/query` now returns each retrieved passage's text alongside its metadata so the Sources panel can show the exact quote.
+
+---
+
+## License
+
+[MIT](LICENSE) © 2026 Sahil Malik
