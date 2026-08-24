@@ -65,6 +65,30 @@ Question: {question}
 
 Answer:"""
 
+# --- Document Insights (executive summary + key entities) ---
+# Budget is chars, not tokens, but ~4 chars/token keeps the sample well under
+# OLLAMA_NUM_CTX once the prompt wrapper and the answer itself are accounted for.
+INSIGHTS_CONTEXT_CHARS = 6000
+INSIGHTS_MAX_ENTITIES = 25
+# Stop sequences (OLLAMA_STOP_SEQUENCES above) cut generation on "\nContext:" and
+# "\nQuestion:" — these prompts deliberately avoid those labels.
+INSIGHTS_SUMMARY_PROMPT = """You are an AI assistant specialized in analyzing documents. Below are representative excerpts drawn from a folder of documents ({document_names}). Write a 1-page executive summary of the whole folder: what these documents are, their main topics, and their most important points. Base the summary *only* on the excerpts provided. Write in clear prose, no headings, no bullet points.
+
+DOCUMENTS: {document_names}
+
+EXCERPTS:
+{excerpts}
+
+EXECUTIVE SUMMARY:"""
+INSIGHTS_ENTITIES_PROMPT = """Read the excerpts below and list the key named entities they mention: people, organizations, locations, dates, monetary amounts, and products. Respond with *only* a JSON array, no other text, in this exact format:
+[{"text": "Acme Corp", "type": "organization"}, {"text": "March 3, 2025", "type": "date"}]
+Allowed "type" values: person, organization, location, date, amount, product, other. Include at most 25 entities, most important first.
+
+EXCERPTS:
+{excerpts}
+
+JSON:"""
+
 # --- API Server ---
 API_HOST = "localhost"
 API_PORT = 5000

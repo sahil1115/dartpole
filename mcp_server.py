@@ -21,6 +21,7 @@ import config # Assuming config.py is in the same directory or accessible
 # Ensure document_processing.core_processor and llm_manager are found
 from document_processing.core_processor import DocumentProcessor
 from llm_manager import LLMManager, get_shared_embeddings
+import insights
 
 # MODIFIED: Added Tkinter imports
 try:
@@ -46,8 +47,10 @@ app_state = {
     "selected_ollama_model": None,
     "is_initialized": False, # LLM + Vector Store ready state
     "docs_processed": False, # Vector store created/loaded state
-    "is_processing": False # Lock for long operations
+    "is_processing": False, # Lock for long operations
     # "initial_docs_path_is_fixed": False, # Removed, as browse button allows override
+    "insights": None, # Cached {summary, entities, ...} for the active session
+    "insights_generating": False # Guards concurrent /insights calls
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -128,6 +131,7 @@ def create_api_app():
         app_state["docs_processed"] = False
         app_state["selected_ollama_model"] = None
         app_state["active_documents_directory"] = None
+        app_state["insights"] = None
         # app_state["is_processing"] = False; # Caller should manage this
 
         if config.CLEAR_VECTOR_STORE_ON_CLEANUP and os.path.exists(config.VECTOR_STORE_DIR):
@@ -199,6 +203,7 @@ def create_api_app():
         app_state["is_initialized"] = False
         app_state["active_documents_directory"] = None
         app_state["selected_ollama_model"] = None
+        app_state["insights"] = None
 
         vector_store_path = config.VECTOR_STORE_DIR
         processed_document_chunks = []
@@ -344,6 +349,7 @@ def create_api_app():
             
             set_llm_manager(llm_manager_instance)
             app_state["selected_ollama_model"] = selected_model
+            app_state["insights"] = None
             
             logger.info(f"LLM '{selected_model}' and QA Chain initialized successfully.")
             return jsonify({"status": "success", "message": f"System ready. Model: {selected_model}."})
@@ -400,6 +406,49 @@ def create_api_app():
         except Exception as e:
             logger.error(f"Error during query processing: {e}", exc_info=True)
             return make_response(jsonify({"status": "error", "message": f"Query processing failed: {str(e)}"}), 500)
+
+    @api_instance.route('/insights', methods=['POST'])
+    def get_corpus_insights():
+        # Checks (does not take) the processing lock, same as /query: insights
+        # generation must not race an in-flight initialize/select_model/cleanup,
+        # but it should not block the user from chatting while it runs.
+        if app_state["is_processing"]:
+            return make_response(jsonify({"status": "error", "message": "Busy with another task."}), 409)
+        if app_state["insights_generating"]:
+            return make_response(jsonify({"status": "error", "message": "Insights are already being generated."}), 409)
+
+        llm_manager = get_llm_manager()
+        if not llm_manager or not app_state["is_initialized"]:
+            msg = "System not ready. " + ("Please select a model." if app_state["docs_processed"] else "Please initialize and select a model.")
+            return make_response(jsonify({"status": "error", "message": msg}), 400)
+
+        data = request.get_json(silent=True) or {}
+        refresh = bool(isinstance(data, dict) and data.get('refresh'))
+
+        cached = app_state.get("insights")
+        if cached and not refresh:
+            return jsonify({"status": "success", "cached": True, **cached})
+
+        app_state["insights_generating"] = True
+        try:
+            logger.info(f"Generating corpus insights (model '{app_state.get('selected_ollama_model', 'N/A')}')...")
+            result = insights.generate_insights(llm_manager.llm_client, llm_manager.vector_store)
+            payload = {
+                "summary": result["summary"],
+                "entities": result["entities"],
+                "entity_source": result["entity_source"],
+                "document_count": len(result["documents"]),
+                "documents": result["documents"],
+                "model": app_state.get("selected_ollama_model"),
+            }
+            app_state["insights"] = payload
+            logger.info(f"Insights generated: {len(payload['entities'])} entities ({payload['entity_source']}), {payload['document_count']} documents.")
+            return jsonify({"status": "success", "cached": False, **payload})
+        except Exception as e:
+            logger.error(f"Error generating insights: {e}", exc_info=True)
+            return make_response(jsonify({"status": "error", "message": f"Insights generation failed: {str(e)}"}), 500)
+        finally:
+            app_state["insights_generating"] = False
 
     @api_instance.route('/documents', methods=['GET'])
     def get_documents_list_from_store():

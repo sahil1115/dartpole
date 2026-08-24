@@ -45,7 +45,11 @@ const state = {
   activeIndex: 0,
   needModel: false,          // docs processed but no model loaded yet
   modelLoaded: false,
-  busy: false
+  busy: false,
+  centerTab: 'chat',         // chat | insights
+  insights: null,            // { summary, entities, entity_source, document_count, documents, model, cached }
+  insightsLoading: false,
+  insightsError: null
 };
 
 let statsTimer = null;
@@ -293,6 +297,7 @@ async function loadDocuments() {
       const pages = (d.pages && d.pages !== 'N/A') ? d.pages.split(',').length : (d.chunk_count || 0);
       row.appendChild(el('span', 'pages', `${pages} p`));
       row.title = d.full_path || d.source;
+      row.addEventListener('click', () => switchCenterTab('insights'));
       wrap.appendChild(row);
     });
     renderDocsBadge();
@@ -424,6 +429,88 @@ async function ask(text) {
   }
 }
 
+/* ----------------------------- Insights ----------------------------- */
+function renderCenterTabs() {
+  $('tabChat').classList.toggle('active', state.centerTab === 'chat');
+  $('tabInsights').classList.toggle('active', state.centerTab === 'insights');
+  const onInsights = state.centerTab === 'insights';
+  $('chatScroll').classList.toggle('hidden', onInsights);
+  $('chatInputRow').classList.toggle('hidden', onInsights);
+  $('insightsView').classList.toggle('hidden', !onInsights);
+}
+
+function switchCenterTab(tab) {
+  state.centerTab = tab;
+  renderCenterTabs();
+  if (tab === 'insights' && !state.insights && !state.insightsLoading) {
+    fetchInsights(false);
+  }
+}
+
+function renderInsights() {
+  const body = $('insightsBody');
+  body.innerHTML = '';
+  $('insightsDocCount').textContent = state.docCount
+    ? `Across ${state.docCount} document${state.docCount === 1 ? '' : 's'}`
+    : '';
+
+  if (state.insightsLoading) {
+    const loading = el('div', 'insights-loading');
+    loading.appendChild(el('span', 'dot'));
+    loading.appendChild(el('span', null, 'Generating executive summary…'));
+    body.appendChild(loading);
+    return;
+  }
+  if (state.insightsError) {
+    body.appendChild(el('div', 'insights-error', state.insightsError));
+    return;
+  }
+  if (!state.insights) {
+    body.appendChild(el('div', 'insights-error', 'No insights yet.'));
+    return;
+  }
+
+  body.appendChild(el('div', 'insights-summary', state.insights.summary || 'No summary available.'));
+
+  const entities = state.insights.entities || [];
+  if (entities.length) {
+    body.appendChild(el('div', 'insights-entities-title', 'KEY ENTITIES'));
+    const chips = el('div', 'ent-chips');
+    entities.forEach(en => {
+      const chip = el('span', 'ent-chip');
+      chip.appendChild(document.createTextNode(en.text));
+      chip.appendChild(el('span', 'ent-type', en.type));
+      chips.appendChild(chip);
+    });
+    body.appendChild(chips);
+  }
+}
+
+async function fetchInsights(refresh) {
+  if (state.insightsLoading) return;
+  state.insightsLoading = true;
+  state.insightsError = null;
+  renderInsights();
+  try {
+    const res = await fetch(`${API_URL}/insights`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh: !!refresh })
+    });
+    const data = await res.json();
+    if (res.ok && data.status === 'success') {
+      state.insights = data;
+    } else {
+      state.insightsError = data.message || 'Failed to generate insights.';
+    }
+  } catch (e) {
+    state.insightsError = `Network error: ${e.message}`;
+  } finally {
+    state.insightsLoading = false;
+    renderInsights();
+  }
+}
+
 function setFooter(msg) { $('statusText').textContent = msg; }
 
 /* ----------------------------- Flow: initialize / model ----------------------------- */
@@ -444,6 +531,10 @@ async function fetchModels() {
 async function doInitialize() {
   if (!state.folder || state.busy) return;
   state.busy = true;
+  state.centerTab = 'chat';
+  state.insights = null;
+  state.insightsLoading = false;
+  state.insightsError = null;
   showStage('indexing');
   renderIndexFiles();
   try {
@@ -481,6 +572,7 @@ async function enterReady() {
   showStage('ready');
   renderChat();
   renderSources();
+  renderCenterTabs();
 }
 
 async function loadModel(name) {
@@ -565,10 +657,15 @@ async function doCleanup(toFresh) {
   state.needModel = false;
   state.modelLoaded = false;
   state.thinking = false;
+  state.centerTab = 'chat';
+  state.insights = null;
+  state.insightsLoading = false;
+  state.insightsError = null;
   $('exportBtn').disabled = true;
   $('docRows').innerHTML = '';
   renderChat();
   renderSources();
+  renderCenterTabs();
   updateInputEnabled();
   showStage('fresh');
   if (!toFresh) setFooter('Cleaned up — choose a folder to begin.');
@@ -698,6 +795,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (e.key === 'Enter') { e.preventDefault(); submitQuery(); }
   });
   $('exportBtn').addEventListener('click', doExport);
+
+  // insights
+  $('tabChat').addEventListener('click', () => switchCenterTab('chat'));
+  $('tabInsights').addEventListener('click', () => switchCenterTab('insights'));
+  $('insightsRefresh').addEventListener('click', () => fetchInsights(true));
 
   renderStatsCollapse();
   renderModelPill();
