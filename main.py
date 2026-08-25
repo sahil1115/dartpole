@@ -11,7 +11,7 @@ from werkzeug.serving import run_simple
 
 # Import config and the API app instance
 import config
-from mcp_server import api_app, app_state, reset_vector_store_on_startup
+from api_server import api_app, app_state, reset_vector_store_on_startup
 
 # Setup logger (Configure root logger once)
 # Ensure log directory from config exists

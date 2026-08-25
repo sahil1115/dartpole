@@ -55,7 +55,7 @@ All nine themes are available from the header theme picker. Each pairs a tinted 
 
 ```
 main.py            UI + API dispatcher (Werkzeug), serves the static frontend
-mcp_server.py      Flask API: /initialize, /models, /select_model, /query,
+api_server.py      Flask API: /initialize, /models, /select_model, /query,
                    /insights, /documents, /status, /browse-folder,
                    /list-folder, /stats/{cpu,ram,disk}, /cleanup, /shutdown
 llm_manager.py     Embeddings (HuggingFace), Chroma vector store, Ollama RAG chain

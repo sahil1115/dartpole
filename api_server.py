@@ -1,4 +1,4 @@
-# mcp_server.py
+# api_server.py
 # version : 1.2.0 (Restored full functionality with ImportError fix)
 # author : Sahil Malik
 
@@ -702,7 +702,7 @@ def create_api_app():
 # --- Create the Flask app instance at the module level ---
 api_app = create_api_app()
 
-# --- Logging and Exit Handling (Only for direct execution of mcp_server.py) ---
+# --- Logging and Exit Handling (Only for direct execution of api_server.py) ---
 def direct_run_setup_logging():
     log_dir = getattr(config, 'LOG_DIR', 'logs')
     os.makedirs(log_dir, exist_ok=True)
@@ -719,7 +719,7 @@ def direct_run_setup_logging():
         force=True
     )
     logging.getLogger("werkzeug").setLevel(logging.WARNING)
-    logger.info("Logging setup for direct execution of mcp_server.py.")
+    logger.info("Logging setup for direct execution of api_server.py.")
 
 
 def direct_run_cleanup_on_exit(): # This is the atexit handler for direct run
@@ -736,7 +736,7 @@ if __name__ == '__main__':
     atexit.register(direct_run_cleanup_on_exit)
     reset_vector_store_on_startup()
 
-    logger.info(f"Starting {config.APP_NAME} API server (DIRECT EXECUTION of mcp_server.py)...")
+    logger.info(f"Starting {config.APP_NAME} API server (DIRECT EXECUTION of api_server.py)...")
     logger.info(f"Platform: {platform.system()} {platform.release()}")
     logger.info(f"Python Version: {sys.version}")
     if not TKINTER_AVAILABLE:
