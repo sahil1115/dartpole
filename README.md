@@ -14,6 +14,7 @@
 - **9 built-in themes** — Light, Dark, Linen, Matcha, Periwinkle, Oat, Harbor, Petal, Fern (choice persists across sessions).
 - **Live system stats** — collapsible CPU / RAM / DISK panel that polls every 2 s; CPU bar turns red under heavy load.
 - **Any Ollama model** — the header model picker lists every model you've pulled (name + size).
+- **Corpus Insights** — a one-click executive summary of the whole indexed folder plus a key-entities list (people, organizations, dates, amounts, and more), generated locally and cached for the session.
 
 ---
 
@@ -38,6 +39,11 @@ The Documents panel shows the indexed files (with file-type dots and page counts
 
 ![Ready — Matcha](docs/screenshots/04-ready-matcha.png)
 
+### Insights
+A **Chat | Insights** tab sits above the center panel once you're in the ready stage. Open Insights (or click a document in the left panel) and DartPole asks the loaded model for a plain-language executive summary of the whole folder plus a list of key entities it mentions — no extra setup, generated on your machine from the same index and model you're already using. Results are cached for the session; **Refresh** regenerates them.
+
+![Insights — Harbor](docs/screenshots/07-insights-harbor.png)
+
 ### Themes
 All nine themes are available from the header theme picker. Each pairs a tinted surface set with one accent.
 
@@ -50,14 +56,17 @@ All nine themes are available from the header theme picker. Each pairs a tinted 
 ```
 main.py            UI + API dispatcher (Werkzeug), serves the static frontend
 mcp_server.py      Flask API: /initialize, /models, /select_model, /query,
-                   /documents, /status, /browse-folder, /list-folder,
-                   /stats/{cpu,ram,disk}, /cleanup, /shutdown
+                   /insights, /documents, /status, /browse-folder,
+                   /list-folder, /stats/{cpu,ram,disk}, /cleanup, /shutdown
 llm_manager.py     Embeddings (HuggingFace), Chroma vector store, Ollama RAG chain
-config.py          All tunables (APP_NAME, models, chunking, ports, prompt)
+insights.py        Corpus-level executive summary + key entities, generated
+                   on demand from the loaded model and the vector store
+config.py          All tunables (APP_NAME, models, chunking, ports, prompts)
 document_processing/   PDF / DOCX / TXT / MD extraction, OCR, chunking
 index.html         Single-screen shell (3 stages)
 css/style.css      12-token theme system + full layout
-js/main.js         Stage machine, theme + model pickers, stats, chat/citations
+js/main.js         Stage machine, theme + model pickers, stats, chat/citations,
+                   Insights tab
 ```
 
 ### Frontend design tokens
@@ -87,6 +96,7 @@ The UI opens automatically at **http://localhost:8000** (API under `/api`). Opti
 1. **Browse…** to a documents folder (PDF · DOCX · TXT · MD).
 2. **Initialize** — DartPole builds the on-device vector index.
 3. Pick a pulled **Ollama model** from the header, then ask away. Answers cite their sources; click a citation chip or a Sources card to focus it. **Export** downloads the conversation.
+4. Switch to the **Insights** tab (or click a document) for a folder-wide executive summary and key entities.
 
 Header actions: **Cleanup** resets the session and clears the vector store; **Shutdown** terminates the server. The vector store is session-only — cleared on startup and shutdown, so document data never accumulates on disk.
 
