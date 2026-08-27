@@ -198,7 +198,10 @@ def process_pdf_file(
             if pdf_plumber_doc and page_num_idx < len(pdf_plumber_doc.pages):
                 try:
                     page = pdf_plumber_doc.pages[page_num_idx]
-                    extracted_text = page.extract_text(x_tolerance=1, y_tolerance=3) # Params from common usage
+                    # x_tolerance=3 matches pdfplumber's own default. A tighter tolerance
+                    # here used to fragment kerned/tabular-figure numerics (e.g. "$1,234.56"
+                    # -> "$1 ,234.56") into a different, still-plausible-looking number.
+                    extracted_text = page.extract_text(x_tolerance=3, y_tolerance=3)
                     if extracted_text and extracted_text.strip():
                         page_text_content += extracted_text.strip() + "\n\n"
                         content_extraction_log.append("Text(pdfplumber)")
@@ -258,41 +261,50 @@ def process_pdf_file(
                 except Exception as img_err:
                     logger.warning(f"Image processing error for page {page_num_display} of {os.path.basename(file_path)}: {img_err}")
 
-            # 3. OCR Fallback — only load page image here if text is actually insufficient
+            # 3. OCR Fallback — render this page fresh at 300 DPI, independent of the
+            # shared rotation/graph cache above (which is 150 DPI). Reusing that cache
+            # here used to silently halve OCR's effective resolution, right where digit
+            # confusion (0/O, 5/S, 8/B, ./,) is worst. One page at a time also avoids
+            # holding every page of the PDF in memory at once.
             final_text_strip = page_text_content.strip()
             min_text_len_for_ocr_skip = getattr(config, 'PDF_MIN_TEXT_LENGTH', 30)
             if OCR_AVAILABLE and \
                (not final_text_strip or len(final_text_strip) < min_text_len_for_ocr_skip):
-                # Lazily load page image only when OCR is actually needed
-                if PDF2IMAGE_AVAILABLE and pil_page_image is None:
+                ocr_page_image = None
+                if PDF2IMAGE_AVAILABLE:
                     try:
-                        if not page_images_cache:
-                            page_images_cache = convert_from_path(file_path, dpi=300, first_page=1, last_page=num_pages)
-                        if page_images_cache and page_num_idx < len(page_images_cache):
-                            pil_page_image = page_images_cache[page_num_idx]
+                        ocr_page_images = convert_from_path(
+                            file_path, dpi=300, first_page=page_num_display, last_page=page_num_display
+                        )
+                        if ocr_page_images:
+                            ocr_page_image = ocr_page_images[0]
+                            rotation_angle = page_meta.get('rotated_degrees')
+                            if rotation_angle:
+                                ocr_page_image = ocr_page_image.rotate(-rotation_angle, expand=True)
                     except Exception as img_err:
-                        logger.warning(f"Could not load page image for OCR fallback on page {page_num_display} of {os.path.basename(file_path)}: {img_err}")
-            if OCR_AVAILABLE and pil_page_image and \
-               (not final_text_strip or len(final_text_strip) < min_text_len_for_ocr_skip):
-                logger.info(f"Attempting OCR for page {page_num_display} of {os.path.basename(file_path)} (Text length: {len(final_text_strip)})")
-                try:
-                    # Image should be rotated by now if auto-rotation was enabled
-                    ocr_text = pytesseract.image_to_string(pil_page_image) # Use the potentially rotated image
-                    if ocr_text and ocr_text.strip():
-                        page_text_content += f"--- OCR Extracted Text ---\n{ocr_text.strip()}\n---\n"
-                        content_extraction_log.append("Text(OCR)")
-                except Exception as ocr_err:
-                    logger.error(f"OCR error on page {page_num_display} of {os.path.basename(file_path)}: {ocr_err}")
+                        logger.warning(f"Could not render page image for OCR fallback on page {page_num_display} of {os.path.basename(file_path)}: {img_err}")
+                if ocr_page_image:
+                    logger.info(f"Attempting OCR for page {page_num_display} of {os.path.basename(file_path)} (Text length: {len(final_text_strip)})")
+                    try:
+                        ocr_text = pytesseract.image_to_string(ocr_page_image)
+                        if ocr_text and ocr_text.strip():
+                            page_text_content += f"--- OCR Extracted Text ---\n{ocr_text.strip()}\n---\n"
+                            content_extraction_log.append("Text(OCR)")
+                    except Exception as ocr_err:
+                        logger.error(f"OCR error on page {page_num_display} of {os.path.basename(file_path)}: {ocr_err}")
 
             # Finalize page content and split
             page_meta['content_extracted'] = ", ".join(sorted(list(set(content_extraction_log)))) or "None"
             final_page_text_to_split = page_text_content.strip()
 
-            if final_page_text_to_split and len(final_page_text_to_split) >= min_text_len_for_ocr_skip:
-                # Use the passed text_splitting_func (e.g., _split_text_into_documents from core_processor)
+            # PDF_MIN_TEXT_LENGTH governs only whether OCR is attempted (above) — it must
+            # not also decide whether a page is kept. A short but real page (e.g. a
+            # remittance stub reading just "Amount Due $123.45", 18 chars) used to be
+            # dropped here silently, hitting neither this branch nor the log below.
+            if final_page_text_to_split:
                 page_docs = text_splitting_func(final_page_text_to_split, page_meta)
                 all_docs.extend(page_docs)
-            elif not final_page_text_to_split:
+            else:
                 logger.debug(f"No text content extracted from page {page_num_display} of {os.path.basename(file_path)}.")
         
     except Exception as e:
