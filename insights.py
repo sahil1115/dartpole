@@ -169,7 +169,7 @@ def extract_entities_heuristic(text, max_entities):
     return [{"text": t, "type": ty} for t, ty, _ in ranked[:max_entities]]
 
 
-def _invoke_no_think(llm_client, prompt):
+def _invoke_no_think(llm_client, prompt, format_schema=None):
     """Calls Ollama's /api/generate directly instead of going through
     langchain_community's deprecated Ollama LLM wrapper.
 
@@ -180,6 +180,11 @@ def _invoke_no_think(llm_client, prompt):
     the wrapper has no way to pass that field through, so this talks to the
     Ollama HTTP API directly using the same connection settings already
     configured on llm_client.
+
+    format_schema, when given, is passed as Ollama's "format" field (a JSON
+    schema) — the server then constrains generation so the response is
+    always valid JSON matching that shape, eliminating the parse-failure
+    class entirely rather than working around it after the fact.
     """
     payload = {
         "model": llm_client.model,
@@ -193,6 +198,8 @@ def _invoke_no_think(llm_client, prompt):
         },
         "keep_alive": llm_client.keep_alive,
     }
+    if format_schema is not None:
+        payload["format"] = format_schema
     try:
         resp = requests.post(
             f"{llm_client.base_url}/api/generate",

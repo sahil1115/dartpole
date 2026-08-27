@@ -30,6 +30,9 @@ opencv-python>=4.9                # Graph/chart detection & rotation heuristics
 # --- System monitoring (API /stats endpoints) ---
 psutil>=5.9
 
+# --- Bill Analysis & Forecasting ---
+python-dateutil>=2.9               # date candidate parsing in bills.py
+
 # ------------------------------------------------------------------
 # System (non-pip) prerequisites:
 #   * Ollama          - https://ollama.com (local LLM server, must be on PATH)

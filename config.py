@@ -89,6 +89,38 @@ EXCERPTS:
 
 JSON:"""
 
+# --- Bill Analysis & Forecasting ---
+# Text budget for the per-document extraction prompt. Kept well under
+# OLLAMA_NUM_CTX so a long candidate list and the JSON response still fit.
+BILLS_MAX_DOC_CHARS = 3000
+# Cap how many candidates go into the prompt/schema enum per document, so a
+# noisy statement (e.g. a full year's transaction history) can't blow the
+# context budget or produce an unwieldy enum.
+BILLS_MAX_CANDIDATES = 20
+BILLS_FORECAST_WINDOW_DAYS = 30
+BILLS_CATEGORIES = [
+    "Utilities", "Rent/Mortgage", "Insurance", "Subscriptions",
+    "Telecom", "Credit Card", "Loan", "Medical", "Other",
+]
+# The model chooses only from candidates already found by exact text
+# matching (enforced via the request's JSON-schema "enum") — it is never
+# asked to read or compute a number itself, since money can't tolerate the
+# error rate that free-form generation would produce.
+BILLS_EXTRACTION_PROMPT = """You are analyzing ONE document to decide whether it is a bill, invoice, or financial statement that requires payment.
+
+Below is the document text, followed by amount candidates and date candidates already found in it by exact text matching. You must choose your answers for total_due, due_date, and issue_date *only* from these exact candidate strings — never invent, calculate, or reformat a value. If the correct value is not among the candidates, leave that field as an empty string.
+
+DOCUMENT:
+{document_text}
+
+AMOUNT CANDIDATES:
+{amount_candidates}
+
+DATE CANDIDATES:
+{date_candidates}
+
+Decide: is this a bill/invoice/statement requiring payment? Who is the vendor? What spending category does it belong to? Which candidate is the total amount due? Which candidate is the due date? Which candidate is the issue or statement date?"""
+
 # --- API Server ---
 API_HOST = "localhost"
 API_PORT = 5000
