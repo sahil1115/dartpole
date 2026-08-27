@@ -14,14 +14,16 @@ import time
 # import random # Not explicitly used in restored logic, but was present
 import gc
 import psutil
+from datetime import date
 from flask import Flask, request, jsonify, make_response
 from langchain_community.vectorstores import Chroma # Assuming Chroma is still used directly here
-from threading import Thread # Used for shutdown
+from threading import Thread # Used for shutdown and the bills background scan
 import config # Assuming config.py is in the same directory or accessible
 # Ensure document_processing.core_processor and llm_manager are found
 from document_processing.core_processor import DocumentProcessor
 from llm_manager import LLMManager, get_shared_embeddings
 import insights
+import bills
 
 # MODIFIED: Added Tkinter imports
 try:
@@ -50,7 +52,8 @@ app_state = {
     "is_processing": False, # Lock for long operations
     # "initial_docs_path_is_fixed": False, # Removed, as browse button allows override
     "insights": None, # Cached {summary, entities, ...} for the active session
-    "insights_generating": False # Guards concurrent /insights calls
+    "insights_generating": False, # Guards concurrent /insights calls
+    "bills_job": None # {status, done, total, current_file, records, error} for /bills/scan
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -96,6 +99,33 @@ def reset_vector_store_on_startup():
     except OSError as e:
         logger.error(f"Failed to reset vector store directory on startup: {e}", exc_info=True)
 
+def _run_bills_scan(job, llm_client, vector_store, sources):
+    """Background worker for POST /bills/scan. Runs in its own thread since
+    a single document takes 10s-70s to extract (observed) and a folder can
+    hold dozens — far too slow to be a blocking request like /insights.
+    `job` is the dict stored at app_state["bills_job"]; mutating it in place
+    is how progress reaches concurrent GET /api/bills polls.
+    """
+    job["status"] = "running"
+    try:
+        for source in sources:
+            job["current_file"] = os.path.basename(source)
+            try:
+                record = bills.extract_bill_from_document(llm_client, vector_store, source)
+                if record and record.get("is_bill"):
+                    job["records"].append(record)
+            except Exception as e:
+                logger.error(f"Bill extraction failed for '{source}': {e}", exc_info=True)
+            job["done"] += 1
+        job["status"] = "done"
+    except Exception as e:
+        logger.error(f"Bills scan failed: {e}", exc_info=True)
+        job["status"] = "error"
+        job["error"] = str(e)
+    finally:
+        job["current_file"] = None
+
+
 def create_api_app():
     """Creates the Flask API application."""
     # No CORS: the UI is served same-origin (DispatcherMiddleware mounts this API
@@ -110,6 +140,14 @@ def create_api_app():
     def set_llm_manager(manager):
         app_state["llm_manager"] = manager
         app_state["is_initialized"] = (manager is not None and app_state["docs_processed"])
+
+    def _bills_scan_running():
+        # A running scan holds direct references to the current llm_client and
+        # vector_store (see start_bills_scan below); re-indexing, switching
+        # models, or cleaning up while it runs would tear those out from under
+        # the background thread.
+        job = app_state.get("bills_job")
+        return bool(job and job.get("status") == "running")
 
 
     # --- Internal Cleanup Function (defined within create_api_app or passed app_state) ---
@@ -132,6 +170,7 @@ def create_api_app():
         app_state["selected_ollama_model"] = None
         app_state["active_documents_directory"] = None
         app_state["insights"] = None
+        app_state["bills_job"] = None
         # app_state["is_processing"] = False; # Caller should manage this
 
         if config.CLEAR_VECTOR_STORE_ON_CLEANUP and os.path.exists(config.VECTOR_STORE_DIR):
@@ -180,6 +219,8 @@ def create_api_app():
     def initialize_documents():
         if app_state["is_processing"]:
             return make_response(jsonify({"status": "error", "message": "Busy with another task."}), 409)
+        if _bills_scan_running():
+            return make_response(jsonify({"status": "error", "message": "A bills scan is running. Wait for it to finish first."}), 409)
 
         data = request.get_json(silent=True)
         if not isinstance(data, dict):
@@ -204,6 +245,7 @@ def create_api_app():
         app_state["active_documents_directory"] = None
         app_state["selected_ollama_model"] = None
         app_state["insights"] = None
+        app_state["bills_job"] = None
 
         vector_store_path = config.VECTOR_STORE_DIR
         processed_document_chunks = []
@@ -316,6 +358,8 @@ def create_api_app():
     def select_and_initialize_model():
         if app_state["is_processing"]:
             return make_response(jsonify({"status": "error", "message": "Busy with another task."}), 409)
+        if _bills_scan_running():
+            return make_response(jsonify({"status": "error", "message": "A bills scan is running. Wait for it to finish first."}), 409)
         if not app_state["docs_processed"]:
             return make_response(jsonify({"status": "error", "message": "Initialize System (process documents) first."}), 400)
 
@@ -350,6 +394,7 @@ def create_api_app():
             set_llm_manager(llm_manager_instance)
             app_state["selected_ollama_model"] = selected_model
             app_state["insights"] = None
+            app_state["bills_job"] = None
             
             logger.info(f"LLM '{selected_model}' and QA Chain initialized successfully.")
             return jsonify({"status": "success", "message": f"System ready. Model: {selected_model}."})
@@ -449,6 +494,119 @@ def create_api_app():
             return make_response(jsonify({"status": "error", "message": f"Insights generation failed: {str(e)}"}), 500)
         finally:
             app_state["insights_generating"] = False
+
+    @api_instance.route('/bills/scan', methods=['POST'])
+    def start_bills_scan():
+        if app_state["is_processing"]:
+            return make_response(jsonify({"status": "error", "message": "Busy with another task."}), 409)
+        if _bills_scan_running():
+            return make_response(jsonify({"status": "error", "message": "A bills scan is already running."}), 409)
+
+        llm_manager = get_llm_manager()
+        if not llm_manager or not app_state["is_initialized"]:
+            msg = "System not ready. " + ("Please select a model." if app_state["docs_processed"] else "Please initialize and select a model.")
+            return make_response(jsonify({"status": "error", "message": msg}), 400)
+
+        vector_store_path = config.VECTOR_STORE_DIR
+        if not os.path.exists(vector_store_path) or not os.listdir(vector_store_path):
+            return make_response(jsonify({"status": "error", "message": "Vector store not found. Initialize System again."}), 400)
+
+        try:
+            # Read-only metadata scan (no embedding model needed), same pattern
+            # as /documents, just to enumerate the distinct source paths.
+            vs_meta = Chroma(persist_directory=vector_store_path, embedding_function=None)
+            results = vs_meta.get(include=['metadatas'])
+            del vs_meta
+            sources = sorted({m.get('source') for m in results.get('metadatas', []) if isinstance(m, dict) and m.get('source')})
+        except Exception as e:
+            logger.error(f"Failed to list documents for bills scan: {e}", exc_info=True)
+            return make_response(jsonify({"status": "error", "message": f"Failed to list documents: {e}"}), 500)
+
+        if not sources:
+            return make_response(jsonify({"status": "error", "message": "No documents found to scan."}), 400)
+
+        job = {"status": "queued", "done": 0, "total": len(sources), "current_file": None, "records": [], "error": None}
+        app_state["bills_job"] = job
+        # Captured here as direct references so the thread keeps working even
+        # if app_state["llm_manager"] is later reassigned; _bills_scan_running()
+        # is what actually prevents a concurrent re-index/cleanup from tearing
+        # the underlying client out from under it.
+        thread = Thread(
+            target=_run_bills_scan,
+            args=(job, llm_manager.llm_client, llm_manager.vector_store, sources),
+            daemon=True,
+        )
+        thread.start()
+        logger.info(f"Bills scan started for {len(sources)} document(s).")
+        return jsonify({"status": "success", "message": f"Bills scan started for {len(sources)} document(s).", "total": len(sources)})
+
+    @api_instance.route('/bills', methods=['GET'])
+    def get_bills():
+        job = app_state.get("bills_job") or {}
+        records = job.get("records", [])
+        return jsonify({
+            "status": "success",
+            "job_status": job.get("status", "idle"),
+            "done": job.get("done", 0),
+            "total": job.get("total", 0),
+            "current_file": job.get("current_file"),
+            "error": job.get("error"),
+            "records": records,
+            "forecast": bills.compute_forecast(records),
+        })
+
+    _BILLS_EDITABLE_FIELDS = {"vendor", "category", "amount", "due_date", "issue_date"}
+
+    @api_instance.route('/bills/<record_id>', methods=['PATCH'])
+    def update_bill(record_id):
+        job = app_state.get("bills_job")
+        record = next((r for r in job["records"] if r.get("id") == record_id), None) if job else None
+        if not record:
+            return make_response(jsonify({"status": "error", "message": f"No bill record with id '{record_id}'."}), 404)
+
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return make_response(jsonify({"status": "error", "message": "Request body must be a JSON object."}), 400)
+
+        for field, value in data.items():
+            if field not in _BILLS_EDITABLE_FIELDS:
+                continue
+            if field == "amount":
+                try:
+                    record["amount"] = float(value)
+                except (TypeError, ValueError):
+                    return make_response(jsonify({"status": "error", "message": "amount must be a number."}), 400)
+                record["amount_confident"] = True
+            elif field == "category":
+                if value not in config.BILLS_CATEGORIES:
+                    return make_response(jsonify({"status": "error", "message": f"category must be one of {config.BILLS_CATEGORIES}."}), 400)
+                record["category"] = value
+            elif field in ("due_date", "issue_date"):
+                if value:
+                    try:
+                        date.fromisoformat(value)
+                    except ValueError:
+                        return make_response(jsonify({"status": "error", "message": f"{field} must be an ISO date (YYYY-MM-DD)."}), 400)
+                    record[field] = value
+                    record[f"{field}_confident"] = True
+                else:
+                    record[field] = None
+                    record[f"{field}_confident"] = False
+            elif field == "vendor":
+                record["vendor"] = (str(value).strip() or "Unknown")
+
+        return jsonify({"status": "success", "record": record})
+
+    @api_instance.route('/bills/<record_id>', methods=['DELETE'])
+    def delete_bill(record_id):
+        job = app_state.get("bills_job")
+        if not job:
+            return make_response(jsonify({"status": "error", "message": "No bills scan has been run."}), 400)
+        before = len(job.get("records", []))
+        job["records"] = [r for r in job.get("records", []) if r.get("id") != record_id]
+        if len(job["records"]) == before:
+            return make_response(jsonify({"status": "error", "message": f"No bill record with id '{record_id}'."}), 404)
+        return jsonify({"status": "success", "message": "Bill record removed."})
 
     @api_instance.route('/documents', methods=['GET'])
     def get_documents_list_from_store():
@@ -665,7 +823,9 @@ def create_api_app():
     def cleanup_route():
         if app_state["is_processing"]:
             return make_response(jsonify({"status": "error", "message": "Busy with another task, cannot cleanup."}), 409)
-        
+        if _bills_scan_running():
+            return make_response(jsonify({"status": "error", "message": "A bills scan is running. Wait for it to finish first."}), 409)
+
         app_state["is_processing"] = True
         try:
             cleanup_internal()
