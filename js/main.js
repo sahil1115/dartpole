@@ -46,10 +46,20 @@ const state = {
   needModel: false,          // docs processed but no model loaded yet
   modelLoaded: false,
   busy: false,
-  centerTab: 'chat',         // chat | insights
+  centerTab: 'chat',         // chat | insights | bills
   insights: null,            // { summary, entities, entity_source, document_count, documents, model, cached }
   insightsLoading: false,
-  insightsError: null
+  insightsError: null,
+  billsDetected: false,      // does this corpus look bill-like? (set from /initialize or /status)
+  billsJobStatus: 'idle',    // idle | queued | running | done | error
+  billsDone: 0,
+  billsTotal: 0,
+  billsCurrentFile: null,
+  billsError: null,
+  billsRecords: [],
+  billsForecast: null,
+  billsCategories: [],
+  billsPollTimer: null
 };
 
 let statsTimer = null;
@@ -433,17 +443,32 @@ async function ask(text) {
 function renderCenterTabs() {
   $('tabChat').classList.toggle('active', state.centerTab === 'chat');
   $('tabInsights').classList.toggle('active', state.centerTab === 'insights');
+  $('tabBills').classList.toggle('active', state.centerTab === 'bills');
+  $('tabBills').classList.toggle('hidden', !state.billsDetected);
   const onInsights = state.centerTab === 'insights';
-  $('chatScroll').classList.toggle('hidden', onInsights);
-  $('chatInputRow').classList.toggle('hidden', onInsights);
+  const onBills = state.centerTab === 'bills';
+  $('chatScroll').classList.toggle('hidden', onInsights || onBills);
+  $('chatInputRow').classList.toggle('hidden', onInsights || onBills);
   $('insightsView').classList.toggle('hidden', !onInsights);
+  $('billsView').classList.toggle('hidden', !onBills);
 }
 
 function switchCenterTab(tab) {
+  if (tab === 'bills' && !state.billsDetected) return;
   state.centerTab = tab;
   renderCenterTabs();
   if (tab === 'insights' && !state.insights && !state.insightsLoading) {
     fetchInsights(false);
+  }
+  if (tab === 'bills') {
+    // Render whatever state is already known immediately (e.g. a scan that
+    // finished via the enterReady() prefetch, before this tab was ever
+    // opened) — fetchBillsStatus() only re-renders as a side effect if this
+    // tab is already active, so switching to it must render on its own too.
+    renderBills();
+    if (state.billsJobStatus === 'idle' || state.billsJobStatus === 'running' || state.billsJobStatus === 'queued') {
+      fetchBillsStatus();
+    }
   }
 }
 
@@ -511,6 +536,282 @@ async function fetchInsights(refresh) {
   }
 }
 
+/* ----------------------------- Bills ----------------------------- */
+function fmtAmount(n) {
+  if (n == null) return '—';
+  const sign = n < 0 ? '-' : '';
+  return `${sign}$${Math.abs(n).toFixed(2)}`;
+}
+function fmtDate(iso) {
+  if (!iso) return '—';
+  try {
+    return new Date(iso + 'T00:00:00').toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  } catch (e) { return iso; }
+}
+
+function stopBillsPolling() {
+  if (state.billsPollTimer) { clearInterval(state.billsPollTimer); state.billsPollTimer = null; }
+}
+function startBillsPolling() {
+  stopBillsPolling();
+  state.billsPollTimer = setInterval(fetchBillsStatus, 2000);
+}
+
+async function fetchBillsStatus() {
+  try {
+    const res = await fetch(`${API_URL}/bills`);
+    const data = await res.json();
+    if (res.ok && data.status === 'success') {
+      state.billsJobStatus = data.job_status;
+      state.billsDone = data.done;
+      state.billsTotal = data.total;
+      state.billsCurrentFile = data.current_file;
+      state.billsError = data.error;
+      state.billsRecords = data.records || [];
+      state.billsForecast = data.forecast;
+      state.billsCategories = data.categories || [];
+      if (data.job_status === 'running' || data.job_status === 'queued') {
+        if (!state.billsPollTimer) startBillsPolling();
+      } else {
+        stopBillsPolling();
+      }
+    }
+  } catch (e) {
+    // leave last known state; the next poll or manual action will retry
+  }
+  if (state.centerTab === 'bills') renderBills();
+}
+
+async function startBillsScan() {
+  $('billsScanBtn').disabled = true;
+  try {
+    const res = await fetch(`${API_URL}/bills/scan`, { method: 'POST' });
+    const data = await res.json();
+    if (res.ok && data.status === 'success') {
+      state.billsJobStatus = 'queued';
+      state.billsDone = 0;
+      state.billsTotal = data.total || 0;
+      state.billsError = null;
+      renderBills();
+      startBillsPolling();
+    } else {
+      state.billsError = data.message || 'Failed to start bills scan.';
+      renderBills();
+    }
+  } catch (e) {
+    state.billsError = `Network error: ${e.message}`;
+    renderBills();
+  } finally {
+    $('billsScanBtn').disabled = false;
+  }
+}
+
+async function patchBillField(id, field, value) {
+  try {
+    const res = await fetch(`${API_URL}/bills/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ [field]: value })
+    });
+    const data = await res.json();
+    if (res.ok && data.status === 'success') {
+      const idx = state.billsRecords.findIndex(r => r.id === id);
+      if (idx !== -1) state.billsRecords[idx] = data.record;
+      renderBills();
+    } else {
+      setFooter(`Could not save change: ${data.message || 'unknown error'}`);
+    }
+  } catch (e) {
+    setFooter(`Network error: ${e.message}`);
+  }
+}
+
+async function deleteBillRow(id) {
+  try {
+    const res = await fetch(`${API_URL}/bills/${id}`, { method: 'DELETE' });
+    if (res.ok) {
+      state.billsRecords = state.billsRecords.filter(r => r.id !== id);
+      state.billsForecast = null;
+      renderBills();
+      fetchBillsStatus();
+    }
+  } catch (e) {
+    setFooter(`Network error: ${e.message}`);
+  }
+}
+
+function billsEditableCell(record, field, display, inputType, extra) {
+  const td = el('td', 'bills-cell-editable');
+  td.textContent = display;
+  td.title = 'Click to edit';
+  td.addEventListener('click', function onClick() {
+    td.removeEventListener('click', onClick);
+    td.textContent = '';
+    let input;
+    if (inputType === 'select') {
+      input = document.createElement('select');
+      (extra || []).forEach(opt => {
+        const o = document.createElement('option');
+        o.value = opt; o.textContent = opt;
+        if (opt === record[field]) o.selected = true;
+        input.appendChild(o);
+      });
+    } else {
+      input = document.createElement('input');
+      input.type = inputType || 'text';
+      input.value = inputType === 'number' ? (record[field] != null ? record[field] : '') : (record[field] || '');
+    }
+    td.appendChild(input);
+    input.focus();
+    if (input.select) input.select();
+    const commit = () => {
+      const raw = input.value;
+      const value = inputType === 'number' ? parseFloat(raw) : raw;
+      if (inputType === 'number' && Number.isNaN(value)) { renderBills(); return; }
+      patchBillField(record.id, field, value);
+    };
+    input.addEventListener('blur', commit);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+      if (e.key === 'Escape') { input.removeEventListener('blur', commit); renderBills(); }
+    });
+    if (inputType === 'select') input.addEventListener('change', commit);
+  });
+  return td;
+}
+
+function renderBills() {
+  const body = $('billsBody');
+  body.innerHTML = '';
+  $('billsHeadTitle').textContent = state.billsRecords.length
+    ? `${state.billsRecords.length} bill${state.billsRecords.length === 1 ? '' : 's'} found`
+    : '';
+  $('billsScanBtn').textContent = state.billsJobStatus === 'done' ? 'Rescan' : 'Scan for bills';
+  $('billsScanBtn').classList.toggle('hidden', state.billsJobStatus === 'running' || state.billsJobStatus === 'queued');
+
+  if (state.billsJobStatus === 'idle') {
+    const empty = el('div', 'bills-empty');
+    empty.appendChild(el('div', 'h', 'Find your bills automatically.'));
+    empty.appendChild(el('div', 'sub', 'DartPole will read every indexed document, identify bills and invoices, and pull out vendor, category, amount, and due date — entirely on this machine.'));
+    empty.appendChild(el('div', 'bills-note', 'Extracted figures are assistive, not authoritative — please verify anything before paying it.'));
+    body.appendChild(empty);
+    return;
+  }
+
+  if (state.billsJobStatus === 'error' && !state.billsRecords.length) {
+    body.appendChild(el('div', 'bills-error', state.billsError || 'Bills scan failed.'));
+    return;
+  }
+
+  if (state.billsJobStatus === 'running' || state.billsJobStatus === 'queued') {
+    const progress = el('div', 'bills-progress');
+    progress.appendChild(el('span', 'dot'));
+    const label = state.billsCurrentFile
+      ? `${state.billsDone} / ${state.billsTotal} · reading ${state.billsCurrentFile}…`
+      : `Starting scan of ${state.billsTotal} document${state.billsTotal === 1 ? '' : 's'}…`;
+    progress.appendChild(el('span', null, label));
+    body.appendChild(progress);
+    if (state.billsRecords.length) {
+      body.appendChild(el('div', 'bills-note', `${state.billsRecords.length} bill${state.billsRecords.length === 1 ? '' : 's'} found so far — editing unlocks once the scan finishes.`));
+    }
+    return;
+  }
+
+  // done
+  if (!state.billsRecords.length) {
+    const empty = el('div', 'bills-empty');
+    empty.appendChild(el('div', 'h', 'No bills found.'));
+    empty.appendChild(el('div', 'sub', "This folder didn't contain anything DartPole could confidently identify as a bill or invoice."));
+    body.appendChild(empty);
+    return;
+  }
+
+  const forecast = state.billsForecast || { category_totals: {}, upcoming: [], past_due: [], window_days: 30 };
+  const summary = el('div', 'bills-summary');
+  const upcomingTotal = forecast.upcoming.reduce((s, r) => s + (r.amount || 0), 0);
+  const pastDueTotal = forecast.past_due.reduce((s, r) => s + (r.amount || 0), 0);
+
+  const dueStat = el('div', 'bills-stat');
+  dueStat.appendChild(el('div', 'lbl', `Due in ${forecast.window_days} days`));
+  dueStat.appendChild(el('div', 'val', `${fmtAmount(upcomingTotal)} · ${forecast.upcoming.length}`));
+  summary.appendChild(dueStat);
+
+  if (forecast.past_due.length) {
+    const pastStat = el('div', 'bills-stat past-due');
+    pastStat.appendChild(el('div', 'lbl', 'Past due'));
+    pastStat.appendChild(el('div', 'val', `${fmtAmount(pastDueTotal)} · ${forecast.past_due.length}`));
+    summary.appendChild(pastStat);
+  }
+
+  const catChips = el('div', 'bills-cat-chips');
+  Object.keys(forecast.category_totals).sort().forEach(cat => {
+    const chip = el('span', 'ent-chip');
+    chip.appendChild(document.createTextNode(cat));
+    chip.appendChild(el('span', 'ent-type', fmtAmount(forecast.category_totals[cat])));
+    catChips.appendChild(chip);
+  });
+  if (Object.keys(forecast.category_totals).length) {
+    const catWrap = el('div', 'bills-stat');
+    catWrap.style.flex = '1';
+    catWrap.appendChild(el('div', 'lbl', 'By category'));
+    catWrap.appendChild(catChips);
+    summary.appendChild(catWrap);
+  }
+  body.appendChild(summary);
+
+  const tableWrap = el('div', 'bills-table-wrap');
+  const table = document.createElement('table');
+  table.className = 'bills-table';
+  const thead = document.createElement('thead');
+  const headRow = document.createElement('tr');
+  ['Vendor', 'Category', 'Amount', 'Due Date', 'Source', ''].forEach(h => {
+    headRow.appendChild(el('th', null, h));
+  });
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+
+  const tbody = document.createElement('tbody');
+  const sorted = [...state.billsRecords].sort((a, b) => (a.due_date || '9999') < (b.due_date || '9999') ? -1 : 1);
+  sorted.forEach(r => {
+    const row = document.createElement('tr');
+    row.appendChild(billsEditableCell(r, 'vendor', r.vendor || 'Unknown', 'text'));
+    row.appendChild(billsEditableCell(r, 'category', r.category || 'Other', 'select', state.billsCategories));
+
+    const amountTd = billsEditableCell(r, 'amount', '', 'number');
+    amountTd.textContent = '';
+    if (!r.amount_confident) amountTd.appendChild(el('span', 'bills-low-confidence'));
+    const amountSpan = el('span', 'bills-amount' + (r.amount < 0 ? ' negative' : ''), fmtAmount(r.amount));
+    amountTd.appendChild(amountSpan);
+    if (!r.amount_confident) amountTd.title = 'Not matched to text found in the source — please verify. Click to edit.';
+    row.appendChild(amountTd);
+
+    const dueTd = billsEditableCell(r, 'due_date', '', 'date');
+    dueTd.textContent = '';
+    if (!r.due_date_confident) dueTd.appendChild(el('span', 'bills-low-confidence'));
+    dueTd.appendChild(document.createTextNode(fmtDate(r.due_date)));
+    if (!r.due_date_confident) dueTd.title = 'Not matched to text found in the source — please verify. Click to edit.';
+    row.appendChild(dueTd);
+
+    const sourceTd = el('td');
+    const sourceSpan = el('span', 'bills-source', baseName(r.source));
+    sourceSpan.title = r.source;
+    sourceTd.appendChild(sourceSpan);
+    row.appendChild(sourceTd);
+
+    const delTd = el('td');
+    const delBtn = el('button', 'bills-delete-btn', '×');
+    delBtn.title = 'Remove this bill';
+    delBtn.addEventListener('click', () => deleteBillRow(r.id));
+    delTd.appendChild(delBtn);
+    row.appendChild(delTd);
+
+    tbody.appendChild(row);
+  });
+  table.appendChild(tbody);
+  tableWrap.appendChild(table);
+  body.appendChild(tableWrap);
+}
+
 function setFooter(msg) { $('statusText').textContent = msg; }
 
 /* ----------------------------- Flow: initialize / model ----------------------------- */
@@ -535,6 +836,11 @@ async function doInitialize() {
   state.insights = null;
   state.insightsLoading = false;
   state.insightsError = null;
+  state.billsDetected = false;
+  state.billsJobStatus = 'idle';
+  state.billsRecords = [];
+  state.billsForecast = null;
+  stopBillsPolling();
   showStage('indexing');
   renderIndexFiles();
   try {
@@ -547,6 +853,7 @@ async function doInitialize() {
     if (!res.ok || (data.status !== 'success' && data.status !== 'warning')) {
       throw new Error(data.message || 'Initialization failed.');
     }
+    state.billsDetected = !!data.bills_detected;
     // Docs are indexed. Now load the selected model (or the first available).
     await fetchModels();
     const target = state.model || (state.models[0] && state.models[0].name);
@@ -573,6 +880,7 @@ async function enterReady() {
   renderChat();
   renderSources();
   renderCenterTabs();
+  if (state.billsDetected) fetchBillsStatus();
 }
 
 async function loadModel(name) {
@@ -661,6 +969,11 @@ async function doCleanup(toFresh) {
   state.insights = null;
   state.insightsLoading = false;
   state.insightsError = null;
+  state.billsDetected = false;
+  state.billsJobStatus = 'idle';
+  state.billsRecords = [];
+  state.billsForecast = null;
+  stopBillsPolling();
   $('exportBtn').disabled = true;
   $('docRows').innerHTML = '';
   renderChat();
@@ -731,6 +1044,7 @@ async function pageLoad() {
       const s = data.system_status;
       state.embedder = s.embedding_model || '—';
       state.folder = s.active_documents_directory || '';
+      state.billsDetected = !!s.bills_detected;
       if (s.selected_ollama_model) state.model = s.selected_ollama_model;
       await fetchModels();
 
@@ -800,6 +1114,8 @@ document.addEventListener('DOMContentLoaded', () => {
   $('tabChat').addEventListener('click', () => switchCenterTab('chat'));
   $('tabInsights').addEventListener('click', () => switchCenterTab('insights'));
   $('insightsRefresh').addEventListener('click', () => fetchInsights(true));
+  $('tabBills').addEventListener('click', () => switchCenterTab('bills'));
+  $('billsScanBtn').addEventListener('click', startBillsScan);
 
   renderStatsCollapse();
   renderModelPill();

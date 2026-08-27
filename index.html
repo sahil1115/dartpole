@@ -176,6 +176,7 @@
                         <div class="center-tabs">
                             <button class="center-tab active" id="tabChat">Chat</button>
                             <button class="center-tab" id="tabInsights">Insights</button>
+                            <button class="center-tab hidden" id="tabBills">Bills</button>
                         </div>
                         <div class="chat-scroll" id="chatScroll">
                             <div class="chat-empty" id="chatEmpty">
@@ -190,6 +191,13 @@
                                 <button class="btn-outline insights-refresh" id="insightsRefresh">Refresh</button>
                             </div>
                             <div id="insightsBody"></div>
+                        </div>
+                        <div class="bills-view hidden" id="billsView">
+                            <div class="insights-head">
+                                <div class="insights-head-title" id="billsHeadTitle"></div>
+                                <button class="btn-soft" id="billsScanBtn">Scan for bills</button>
+                            </div>
+                            <div id="billsBody"></div>
                         </div>
                         <div class="chat-input" id="chatInputRow">
                             <input type="text" id="queryInput" placeholder="Ask anything about your documents…">

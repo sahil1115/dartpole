@@ -53,7 +53,8 @@ app_state = {
     # "initial_docs_path_is_fixed": False, # Removed, as browse button allows override
     "insights": None, # Cached {summary, entities, ...} for the active session
     "insights_generating": False, # Guards concurrent /insights calls
-    "bills_job": None # {status, done, total, current_file, records, error} for /bills/scan
+    "bills_job": None, # {status, done, total, current_file, records, error} for /bills/scan
+    "bills_detected": False # Cheap regex pre-scan result: does this corpus look bill-like?
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -246,6 +247,7 @@ def create_api_app():
         app_state["selected_ollama_model"] = None
         app_state["insights"] = None
         app_state["bills_job"] = None
+        app_state["bills_detected"] = False
 
         vector_store_path = config.VECTOR_STORE_DIR
         processed_document_chunks = []
@@ -305,9 +307,19 @@ def create_api_app():
 
             app_state["docs_processed"] = True
             app_state["active_documents_directory"] = doc_dir
+            # Cheap regex-only pre-scan (no LLM cost) over the chunks already in
+            # memory, so the UI knows whether to offer the Bills tab at all
+            # without the user having to run a scan first to find out.
+            try:
+                sample_text = "\n".join(d.get('page_content', '') for d in processed_document_chunks[:200])
+                app_state["bills_detected"] = bool(sample_text.strip()) and bills.looks_like_bill(sample_text)
+            except Exception as e:
+                logger.warning(f"Bills pre-scan failed (non-fatal): {e}")
+                app_state["bills_detected"] = False
             return jsonify({
                 "status": "success",
-                "message": f"Documents processed from '{os.path.basename(doc_dir)}' ({doc_chunk_count} chunks). Vector store ready."
+                "message": f"Documents processed from '{os.path.basename(doc_dir)}' ({doc_chunk_count} chunks). Vector store ready.",
+                "bills_detected": app_state["bills_detected"]
             })
 
         except Exception as e:
@@ -553,6 +565,7 @@ def create_api_app():
             "error": job.get("error"),
             "records": records,
             "forecast": bills.compute_forecast(records),
+            "categories": config.BILLS_CATEGORIES,
         })
 
     _BILLS_EDITABLE_FIELDS = {"vendor", "category", "amount", "due_date", "issue_date"}
@@ -662,6 +675,7 @@ def create_api_app():
             "vector_store_exists": vector_store_exists_and_populated,
             "embedding_model": config.EMBEDDING_MODEL_NAME,
             "ollama_base_url": config.OLLAMA_BASE_URL,
+            "bills_detected": app_state.get("bills_detected", False),
             # "is_initial_docs_path_fixed": app_state.get("initial_docs_path_is_fixed", False) # Removed this flag
         }
         logger.debug(f"Reporting system status: {status_data}")
