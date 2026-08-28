@@ -15,6 +15,7 @@
 - **Live system stats** — collapsible CPU / RAM / DISK panel that polls every 2 s; CPU bar turns red under heavy load.
 - **Any Ollama model** — the header model picker lists every model you've pulled (name + size).
 - **Corpus Insights** — a one-click executive summary of the whole indexed folder plus a key-entities list (people, organizations, dates, amounts, and more), generated locally and cached for the session.
+- **Bill Analysis & Forecasting** — index a folder of bills or invoices and DartPole automatically offers a **Bills** tab: vendor, category, amount, and due date pulled out per document, with a spend-by-category breakdown and a due-in-30-days forecast. Amounts and dates are found by exact text matching first — the model only picks which one is which, and every unmatched value is flagged for you to check rather than presented as fact.
 
 ---
 
@@ -44,6 +45,11 @@ A **Chat | Insights** tab sits above the center panel once you're in the ready s
 
 ![Insights — Harbor](docs/screenshots/07-insights-harbor.png)
 
+### Bills
+When an indexed folder looks like it contains bills or invoices (a cheap, local text scan — no LLM cost), a **Bills** tab appears alongside Chat and Insights. **Scan for bills** reads each document, and DartPole shows a spend-by-category breakdown, what's due in the next 30 days, and an editable table with the source document for every row. Anything the model couldn't match to real text in the document — an amount, a due date — is marked with a dot so you know to double-check it before paying anything.
+
+![Bills — Petal](docs/screenshots/08-bills-petal.png)
+
 ### Themes
 All nine themes are available from the header theme picker. Each pairs a tinted surface set with one accent.
 
@@ -56,17 +62,20 @@ All nine themes are available from the header theme picker. Each pairs a tinted 
 ```
 main.py            UI + API dispatcher (Werkzeug), serves the static frontend
 api_server.py      Flask API: /initialize, /models, /select_model, /query,
-                   /insights, /documents, /status, /browse-folder,
+                   /insights, /bills/*, /documents, /status, /browse-folder,
                    /list-folder, /stats/{cpu,ram,disk}, /cleanup, /shutdown
 llm_manager.py     Embeddings (HuggingFace), Chroma vector store, Ollama RAG chain
 insights.py        Corpus-level executive summary + key entities, generated
                    on demand from the loaded model and the vector store
+bills.py           Bill extraction: regex/dateutil candidates for amounts
+                   and dates, LLM picks between them (never invents a value),
+                   plus the category/forecast aggregation
 config.py          All tunables (APP_NAME, models, chunking, ports, prompts)
 document_processing/   PDF / DOCX / TXT / MD extraction, OCR, chunking
 index.html         Single-screen shell (3 stages)
 css/style.css      12-token theme system + full layout
 js/main.js         Stage machine, theme + model pickers, stats, chat/citations,
-                   Insights tab
+                   Insights tab, Bills tab
 ```
 
 ### Frontend design tokens
@@ -83,7 +92,7 @@ File-type dots are theme-independent: PDF `oklch(0.62 0.13 25)`, DOCX `oklch(0.6
 ### Prerequisites
 - **Python 3.12+**
 - **[Ollama](https://ollama.com)** installed and on `PATH`, with at least one model pulled (e.g. `ollama pull llama3.1:8b`).
-- Optional (better PDF handling): **Tesseract OCR** and **Poppler** — see `requirements.txt` for links.
+- Optional (better PDF handling): **Tesseract OCR** and **Poppler** — see `requirements.txt` for links. Poppler is what lets scanned/image-only PDFs be OCR'd at all, so it's worth installing if you plan to use Bill Analysis on scanned statements.
 
 ### Install & start
 ```bash
@@ -97,6 +106,7 @@ The UI opens automatically at **http://localhost:8000** (API under `/api`). Opti
 2. **Initialize** — DartPole builds the on-device vector index.
 3. Pick a pulled **Ollama model** from the header, then ask away. Answers cite their sources; click a citation chip or a Sources card to focus it. **Export** downloads the conversation.
 4. Switch to the **Insights** tab (or click a document) for a folder-wide executive summary and key entities.
+5. If a **Bills** tab appears, click **Scan for bills** for a category breakdown and a due-in-30-days forecast — click any cell to correct it.
 
 Header actions: **Cleanup** resets the session and clears the vector store; **Shutdown** terminates the server. The vector store is session-only — cleared on startup and shutdown, so document data never accumulates on disk.
 
